@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Mono.Cecil;
+using Mono.Cecil.Pdb;
 using UnrealSharpWeaver.MetaData;
 using UnrealSharpWeaver.TypeProcessors;
 
@@ -84,7 +85,9 @@ public static class Program
 
             ReaderParameters readerParams = new ReaderParameters
             {
-                AssemblyResolver = resolver
+                AssemblyResolver = resolver,
+                ReadSymbols = true,
+                SymbolReaderProvider = new PdbReaderProvider(),
             };
 
             AssemblyDefinition userAssembly = AssemblyDefinition.ReadAssembly(userAssemblyPath, readerParams);
@@ -93,6 +96,7 @@ public static class Program
             {
                 string weaverOutputPath = Path.Combine(outputDirInfo.FullName, Path.GetFileName(userAssemblyPath));
                 StartWeavingAssembly(userAssembly, weaverOutputPath);
+                continue;
             }
             catch (WeaverProcessError error)
             {
@@ -103,8 +107,9 @@ public static class Program
                 Console.Error.WriteLine($"Exception processing {userAssemblyPath}: {ex.Message}");
                 Console.Error.WriteLine(ex.StackTrace);
             }
+            return false;
         }
-
+        
         return true;
     }
     
@@ -174,7 +179,10 @@ public static class Program
         try
         {
             Task.WaitAll(cleanupTask);
-            assembly.Write(assemblyOutputPath);
+            assembly.Write(assemblyOutputPath, new WriterParameters
+            {
+                SymbolWriterProvider = new PdbWriterProvider(),
+            });
         }
         catch (Exception ex)
         {
@@ -192,7 +200,7 @@ public static class Program
             WriteIndented = true
         });
 
-        string metadataFilePath = Path.ChangeExtension(outputPath, "json");
+        string metadataFilePath = Path.ChangeExtension(outputPath, "metadata.json");
         File.WriteAllText(metadataFilePath, metaDataContent);
     }
 
@@ -209,21 +217,16 @@ public static class Program
             
             try
             {
+                void RegisterType(List<TypeDefinition> typeDefinitions, TypeDefinition typeDefinition)
+                {
+                    typeDefinitions.Add(typeDefinition);
+                    WeaverHelper.AddGeneratedTypeAttribute(typeDefinition);
+                }
+                
                 foreach (var module in userAssembly.Modules)
                 {
                     foreach (var type in module.Types)
                     {
-                        if (WeaverHelper.IsGenerated(type))
-                        {
-                            continue;
-                        }
-
-                        void RegisterType(List<TypeDefinition> typeDefinitions, TypeDefinition typeDefinition)
-                        {
-                            typeDefinitions.Add(typeDefinition);
-                            WeaverHelper.AddGeneratedTypeAttribute(typeDefinition);
-                        }
-                        
                         if (WeaverHelper.IsUClass(type))
                         {
                             RegisterType(classes, type);
@@ -261,7 +264,7 @@ public static class Program
             UnrealInterfaceProcessor.ProcessInterfaces(interfaces, metadata);
             UnrealStructProcessor.ProcessStructs(structs, metadata, userAssembly);
             UnrealDelegateProcessor.ProcessMulticastDelegates(multicastDelegates);
-            UnrealDelegateProcessor.ProcessSingleDelegates(delegates);
+            UnrealDelegateProcessor.ProcessSingleDelegates(delegates, userAssembly);
             UnrealClassProcessor.ProcessClasses(classes, metadata);
         }
         catch (Exception ex)
@@ -271,26 +274,49 @@ public static class Program
         }
     }
 
+    private static void RecursiveFileCopy(DirectoryInfo sourceDirectory, DirectoryInfo destinationDirectory)
+    {
+        // Early out of our search if the last updated timestamps match
+        if (sourceDirectory.LastWriteTimeUtc == destinationDirectory.LastWriteTimeUtc) return;
+
+        if (!destinationDirectory.Exists)
+        {
+            destinationDirectory.Create();
+        }
+
+        foreach (FileInfo sourceFile in sourceDirectory.GetFiles())
+        {
+            string destinationFilePath = Path.Combine(destinationDirectory.FullName, sourceFile.Name);
+            FileInfo destinationFile = new FileInfo(destinationFilePath);
+
+            if (!destinationFile.Exists || sourceFile.LastWriteTimeUtc > destinationFile.LastWriteTimeUtc)
+            {
+                sourceFile.CopyTo(destinationFilePath, true);
+            }
+        }
+
+        // Update our write time to match source for faster copying
+        destinationDirectory.LastWriteTimeUtc = sourceDirectory.LastWriteTimeUtc;
+
+        foreach (DirectoryInfo subSourceDirectory in sourceDirectory.GetDirectories())
+        {
+            string subDestinationDirectoryPath = Path.Combine(destinationDirectory.FullName, subSourceDirectory.Name);
+            DirectoryInfo subDestinationDirectory = new DirectoryInfo(subDestinationDirectoryPath);
+
+            RecursiveFileCopy(subSourceDirectory, subDestinationDirectory);
+        }
+    }
+
     private static void CopyAssemblyDependencies(string destinationPath, string sourcePath)
     {
         var directoryName = Path.GetDirectoryName(destinationPath) ?? throw new InvalidOperationException("Assembly path does not have a valid directory.");
 
-        if (!Directory.Exists(directoryName)) 
-        {
-            Directory.CreateDirectory(directoryName);
-        }
-
         try
         {
-            string[] dependencies = Directory.GetFiles(sourcePath, "*.*");
-            foreach (var dependency in dependencies) 
-            {
-                var destPath = Path.Combine(directoryName, Path.GetFileName(dependency));
-                if (!File.Exists(destPath) || new FileInfo(dependency).LastWriteTimeUtc > new FileInfo(destPath).LastWriteTimeUtc)
-                {
-                    File.Copy(dependency, destPath, true);
-                }
-            }
+            var destinationDirectory = new DirectoryInfo(directoryName);
+            var sourceDirectory = new DirectoryInfo(sourcePath);
+
+            RecursiveFileCopy(sourceDirectory, destinationDirectory);
         }
         catch (Exception ex)
         {

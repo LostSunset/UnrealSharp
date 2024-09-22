@@ -6,12 +6,12 @@ public abstract class BuildToolAction
     {
         BuildToolAction buildToolAction = Program.BuildToolOptions.Action switch
         {
-            BuildAction.Build => new BuildSolution(),
+            BuildAction.Build => new BuildUserSolution(),
             BuildAction.Clean => new CleanSolution(),
             BuildAction.GenerateProject => new GenerateProject(),
             BuildAction.Rebuild => new RebuildSolution(),
             BuildAction.Weave => new WeaveProject(),
-            BuildAction.Publish => new PublishProject(),
+            BuildAction.PackageProject => new PackageProject(),
             BuildAction.GenerateSolution => new GenerateSolution(),
             BuildAction.BuildWeave => new BuildWeave(),
             _ => throw new Exception($"Can't find build action with name \"{Program.BuildToolOptions.Action}\"")
