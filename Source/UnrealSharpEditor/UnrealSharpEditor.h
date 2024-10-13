@@ -14,6 +14,8 @@ enum HotReloadStatus
     Active
 };
 
+DECLARE_LOG_CATEGORY_EXTERN(LogUnrealSharpEditor, Log, All);
+
 class FUnrealSharpEditorModule : public IModuleInterface
 {
 public:
@@ -38,8 +40,6 @@ private:
 
     static void RunGame(FString ExecutablePath);
 
-    void OnUnrealSharpInitialized();
-
     static void OnCreateNewProject();
     static void OnCompileManagedCode();
     static void OnRegenerateSolution();
@@ -62,6 +62,10 @@ private:
     
     void RegisterCommands();
     void RegisterMenu();
+    void RegisterGameplayTags();
+
+    static void ProcessGameplayTags();
+    
     FSlateIcon GetMenuIcon() const;
     
     HotReloadStatus HotReloadStatus = Inactive;

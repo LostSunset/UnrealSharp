@@ -1,9 +1,12 @@
 ﻿#include "UnrealSharpEditor.h"
 #include "AssetToolsModule.h"
 #include "CSCommands.h"
+#include "CSScriptBuilder.h"
 #include "DirectoryWatcherModule.h"
 #include "CSStyle.h"
 #include "DesktopPlatformModule.h"
+#include "GameplayTagsModule.h"
+#include "GameplayTagsSettings.h"
 #include "IDirectoryWatcher.h"
 #include "ISettingsModule.h"
 #include "SourceCodeNavigation.h"
@@ -19,6 +22,8 @@
 
 #define LOCTEXT_NAMESPACE "FUnrealSharpEditorModule"
 
+DEFINE_LOG_CATEGORY(LogUnrealSharpEditor);
+
 FUnrealSharpEditorModule& FUnrealSharpEditorModule::Get()
 {
 	return FModuleManager::LoadModuleChecked<FUnrealSharpEditorModule>("UnrealSharpEditor");
@@ -26,20 +31,52 @@ FUnrealSharpEditorModule& FUnrealSharpEditorModule::Get()
 
 void FUnrealSharpEditorModule::StartupModule()
 {
-	FCSManager& Manager = FCSManager::Get();
-	if (!Manager.IsInitialized())
+	UCSManager& Manager = UCSManager::GetOrCreate();
+	
+	// Deny any classes from being Edited in BP that's in the UnrealSharp package. Otherwise it would crash the engine.
+	// Workaround for a hardcoded feature in the engine for Blueprints.
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+	FName UnrealSharpPackageName = Manager.GetUnrealSharpPackage()->GetFName();
+	AssetToolsModule.Get().GetWritableFolderPermissionList()->AddDenyListItem(UnrealSharpPackageName, UnrealSharpPackageName);
+
+	FDirectoryWatcherModule& DirectoryWatcherModule = FModuleManager::LoadModuleChecked<FDirectoryWatcherModule>("DirectoryWatcher");
+	IDirectoryWatcher* DirectoryWatcher = DirectoryWatcherModule.Get();
+	FDelegateHandle Handle;
+
+	FString FullScriptPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / "Script");
+
+	if (!FPaths::DirectoryExists(FullScriptPath))
 	{
-		Manager.OnUnrealSharpInitializedEvent().AddRaw(this, &FUnrealSharpEditorModule::OnUnrealSharpInitialized);
+		FPlatformFileManager::Get().GetPlatformFile().CreateDirectory(*FullScriptPath);
 	}
-	else
+	
+	//Bind to directory watcher to look for changes in C# code.
+	DirectoryWatcher->RegisterDirectoryChangedCallback_Handle(
+		FullScriptPath,
+		IDirectoryWatcher::FDirectoryChanged::CreateRaw(this, &FUnrealSharpEditorModule::OnCSharpCodeModified),
+		Handle);
+
+	FCSReinstancer::Get().Initialize();
+
+	TickDelegate = FTickerDelegate::CreateRaw(this, &FUnrealSharpEditorModule::Tick);
+	TickDelegateHandle = FTSTicker::GetCoreTicker().AddTicker(TickDelegate);
+
+	TArray<FString> ProjectPaths;
+	FCSProcHelper::GetAllProjectPaths(ProjectPaths);
+
+	if (ProjectPaths.IsEmpty())
 	{
-		OnUnrealSharpInitialized();
+		IMainFrameModule::Get().OnMainFrameCreationFinished().AddLambda([this](TSharedPtr<SWindow>, bool)
+		{
+			SuggestProjectSetup();
+		});
 	}
 
 	FCSStyle::Initialize();
 
 	RegisterCommands();
 	RegisterMenu();
+	RegisterGameplayTags();
 }
 
 void FUnrealSharpEditorModule::ShutdownModule()
@@ -60,8 +97,14 @@ void FUnrealSharpEditorModule::OnCSharpCodeModified(const TArray<FFileChangeData
 
 	for (const FFileChangeData& ChangedFile : ChangedFiles)
 	{
+		// Skip ProjectGlue files
+		if (ChangedFile.Filename.Contains(TEXT("ProjectGlue")))
+		{
+			continue;
+		}
+		
 		// Skip generated files in bin and obj folders
-		if (ChangedFile.Filename.Contains("\\bin\\") || ChangedFile.Filename.Contains("\\obj\\"))
+		if (ChangedFile.Filename.Contains(TEXT("\\bin\\")) || ChangedFile.Filename.Contains(TEXT("\\obj\\")))
 		{
 			continue;
 		}
@@ -110,7 +153,7 @@ void FUnrealSharpEditorModule::StartHotReload()
 		return;
 	}
 	
-	FCSManager& CSharpManager = FCSManager::Get();
+	UCSManager& CSharpManager = UCSManager::Get();
 
 	// Unload the user's assembly, to apply the new one.
 	// TODO: Unload the assembly that was modified, not all of them, for sake of hot reload speed.
@@ -128,7 +171,7 @@ void FUnrealSharpEditorModule::StartHotReload()
 	Progress.EnterProgressFrame(1, LOCTEXT("HotReload", "Loading C# Assembly..."));
 
 	// TODO: Same here, only load the assembly that was modified.
-	if (!CSharpManager.LoadUserAssembly())
+	if (!CSharpManager.LoadAllUserAssemblies())
 	{
 		HotReloadStatus = Inactive;
 		bHotReloadFailed = true;
@@ -140,50 +183,6 @@ void FUnrealSharpEditorModule::StartHotReload()
 
 	HotReloadStatus = Inactive;
 	bHotReloadFailed = false;
-}
-
-void FUnrealSharpEditorModule::OnUnrealSharpInitialized()
-{
-	FCSManager& Manager = FCSManager::Get();
-	
-	// Deny any classes from being Edited in BP that's in the UnrealSharp package. Otherwise it would crash the engine.
-	// Workaround for a hardcoded feature in the engine for Blueprints.
-	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
-	FName UnrealSharpPackageName = Manager.GetUnrealSharpPackage()->GetFName();
-	AssetToolsModule.Get().GetWritableFolderPermissionList()->AddDenyListItem(UnrealSharpPackageName, UnrealSharpPackageName);
-
-	FDirectoryWatcherModule& DirectoryWatcherModule = FModuleManager::LoadModuleChecked<FDirectoryWatcherModule>("DirectoryWatcher");
-	IDirectoryWatcher* DirectoryWatcher = DirectoryWatcherModule.Get();
-	FDelegateHandle Handle;
-
-	FString FullScriptPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / "Script");
-
-	if (!FPaths::DirectoryExists(FullScriptPath))
-	{
-		FPlatformFileManager::Get().GetPlatformFile().CreateDirectory(*FullScriptPath);
-	}
-	
-	//Bind to directory watcher to look for changes in C# code.
-	DirectoryWatcher->RegisterDirectoryChangedCallback_Handle(
-		FullScriptPath,
-		IDirectoryWatcher::FDirectoryChanged::CreateRaw(this, &FUnrealSharpEditorModule::OnCSharpCodeModified),
-		Handle);
-
-	FCSReinstancer::Get().Initialize();
-
-	TickDelegate = FTickerDelegate::CreateRaw(this, &FUnrealSharpEditorModule::Tick);
-	TickDelegateHandle = FTSTicker::GetCoreTicker().AddTicker(TickDelegate);
-
-	TArray<FString> ProjectPaths;
-	FCSProcHelper::GetAllProjectPaths(ProjectPaths);
-
-	if (ProjectPaths.IsEmpty())
-	{
-		IMainFrameModule::Get().OnMainFrameCreationFinished().AddLambda([this](TSharedPtr<SWindow>, bool)
-		{
-			SuggestProjectSetup();
-		});
-	}
 }
 
 void FUnrealSharpEditorModule::OnCreateNewProject()
@@ -442,6 +441,66 @@ void FUnrealSharpEditorModule::RegisterMenu()
 	}));
 
 	Section.AddEntry(Entry);
+}
+
+void FUnrealSharpEditorModule::RegisterGameplayTags()
+{
+	IGameplayTagsModule::OnTagSettingsChanged.AddStatic(&FUnrealSharpEditorModule::ProcessGameplayTags);
+	IGameplayTagsModule::OnGameplayTagTreeChanged.AddStatic(&FUnrealSharpEditorModule::ProcessGameplayTags);
+	ProcessGameplayTags();
+}
+
+void FUnrealSharpEditorModule::ProcessGameplayTags()
+{
+	TArray<const FGameplayTagSource*> Sources;
+	UGameplayTagsManager& Manager = UGameplayTagsManager::Get();
+
+	const int32 NumValues = StaticEnum<EGameplayTagSourceType>()->NumEnums();
+	for (int32 Index = 0; Index < NumValues; Index++)
+	{
+		EGameplayTagSourceType SourceType = static_cast<EGameplayTagSourceType>(Index);
+		Manager.FindTagSourcesWithType(SourceType, Sources);
+	}
+
+	FCSScriptBuilder ScriptBuilder(FCSScriptBuilder::IndentType::Tabs);
+	ScriptBuilder.AppendLine(TEXT("using UnrealSharp.GameplayTags;"));
+	ScriptBuilder.AppendLine();
+	ScriptBuilder.AppendLine(TEXT("public static class GameplayTags"));
+	ScriptBuilder.OpenBrace();
+
+	auto GenerateGameplayTag = [&ScriptBuilder](const FGameplayTagTableRow& RowTag)
+	{
+		const FString TagName = RowTag.Tag.ToString();
+		const FString TagNameVariable = TagName.Replace(TEXT("."), TEXT("_"));
+		ScriptBuilder.AppendLine(FString::Printf(TEXT("public static readonly FGameplayTag %s = new(\"%s\");"), *TagNameVariable, *TagName));
+	};
+
+	for (const FGameplayTagSource* Source : Sources)
+	{
+		if (Source->SourceTagList)
+		{
+			for (const FGameplayTagTableRow& RowTag : Source->SourceTagList->GameplayTagList)
+			{
+				GenerateGameplayTag(RowTag);
+			}
+		}
+
+		if (Source->SourceRestrictedTagList)
+		{
+			for (const FGameplayTagTableRow& RowTag : Source->SourceRestrictedTagList->RestrictedGameplayTagList)
+			{
+				GenerateGameplayTag(RowTag);
+			}
+		}
+	}
+
+	ScriptBuilder.CloseBrace();
+
+	const FString Path = FPaths::Combine(FCSProcHelper::GetScriptFolderDirectory(), TEXT("ProjectGlue"), TEXT("GameplayTags.cs"));
+	if (!FFileHelper::SaveStringToFile(ScriptBuilder.ToString(), *Path))
+	{
+		UE_LOG(LogUnrealSharpEditor, Error, TEXT("Failed to save GameplayTags.cs to %s"), *Path);
+	}
 }
 
 FSlateIcon FUnrealSharpEditorModule::GetMenuIcon() const
