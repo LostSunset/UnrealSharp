@@ -1,5 +1,5 @@
 ﻿#pragma once
-#include "CSharpForUE/Export/FunctionsExporter.h"
+#include "UnrealSharpCore/Export/FunctionsExporter.h"
 
 #include "CoreMinimal.h"
 #include "GEditorExporter.generated.h"
