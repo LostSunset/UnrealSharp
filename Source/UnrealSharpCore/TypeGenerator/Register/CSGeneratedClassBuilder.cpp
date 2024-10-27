@@ -85,6 +85,15 @@ void FCSGeneratedClassBuilder::StartBuildingType()
 	Field->UpdateCustomPropertyListForPostConstruction();
 		
 	RegisterFieldToLoader(ENotifyRegistrationType::NRT_Class);
+
+	if (Field->IsChildOf<UEngineSubsystem>()
+#if WITH_EDITOR
+	|| Field->IsChildOf<UEditorSubsystem>()
+#endif
+	)
+	{
+		FSubsystemCollectionBase::ActivateExternalSubsystem(Field);
+	}
 }
 
 void FCSGeneratedClassBuilder::NewField(UCSClass* OldField, UCSClass* NewField)
@@ -102,6 +111,16 @@ void FCSGeneratedClassBuilder::NewField(UCSClass* OldField, UCSClass* NewField)
 	OldField->ClassGeneratedBy = nullptr;
 	OldField->bCooked = true;
 #endif
+
+	if (Field->IsChildOf<UEngineSubsystem>()
+	#if WITH_EDITOR
+	|| Field->IsChildOf<UEditorSubsystem>()
+	#endif
+	)
+	{
+		FSubsystemCollectionBase::DeactivateExternalSubsystem(OldField);
+	}
+	
 	OldField->ClassFlags |= CLASS_NewerVersionExists;
 	FCSTypeRegistry::Get().GetOnNewClassEvent().Broadcast(OldField, NewField);
 }
@@ -159,6 +178,22 @@ void FCSGeneratedClassBuilder::InitialSetup(const FObjectInitializer& ObjectInit
 	//Execute the native class' constructor first.
 	UClass* NativeClass = GetFirstNativeClass(ObjectInitializer.GetClass());
 	NativeClass->ClassConstructor(ObjectInitializer);
+
+	for (TFieldIterator<FProperty> PropertyIt(ManagedClass); PropertyIt; ++PropertyIt)
+	{
+		FProperty* Property = *PropertyIt;
+		if (!IsManagedType(Property->GetOwnerClass()))
+		{
+			break;
+		}
+
+		if (Property->HasAllPropertyFlags(CPF_ZeroConstructor))
+		{
+			continue;
+		}
+		
+		Property->InitializeValue_InContainer(ObjectInitializer.GetObj());
+	}
 }
 
 void FCSGeneratedClassBuilder::SetupDefaultSubobjects(const FObjectInitializer& ObjectInitializer,
