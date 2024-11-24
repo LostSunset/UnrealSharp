@@ -41,6 +41,7 @@ bool FCSProcHelper::InvokeCommand(const FString& ProgramPath, const FString& Arg
 	while (FPlatformProcess::IsProcRunning(ProcHandle))
 	{
 		Output += FPlatformProcess::ReadPipe(ReadPipe);
+		FPlatformProcess::Sleep(0.1f);
 	}
 
 	FPlatformProcess::GetProcReturnCode(ProcHandle, &OutReturnCode);
@@ -183,9 +184,10 @@ FString FCSProcHelper::GetUnrealSharpMetadataPath()
 void FCSProcHelper::GetUserProjectNames(TArray<FString>& UserProjectNames)
 {
 	const FString ProjectMetadataPath = GetUnrealSharpMetadataPath();
+	
 	if (!FPaths::FileExists(ProjectMetadataPath))
 	{
-		UE_LOG(LogUnrealSharpProcHelper, Fatal, TEXT("Couldn't find UnrealSharp metadata file at: %s"), *ProjectMetadataPath);
+		// Can be null at the start of the project.
 		return;
 	}
 
