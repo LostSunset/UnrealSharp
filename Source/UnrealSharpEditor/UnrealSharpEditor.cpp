@@ -17,6 +17,7 @@
 #include "UnrealSharpCore/CSDeveloperSettings.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Interfaces/IMainFrameModule.h"
+#include "Interfaces/IPluginManager.h"
 #include "Kismet2/DebuggerCommands.h"
 #include "Misc/ScopedSlowTask.h"
 #include "Reinstancing/CSReinstancer.h"
@@ -341,7 +342,8 @@ void FUnrealSharpEditorModule::OpenSolution()
 	}
 	
 	FString OpenSolutionArgs = FString::Printf(TEXT("/c \"%s\""), *SolutionPath);
-	FPlatformProcess::ExecProcess(TEXT("cmd.exe"), *OpenSolutionArgs, nullptr, nullptr, nullptr);
+	FPlatformProcess::CreateProc(TEXT("cmd.exe"), *OpenSolutionArgs, true, true, false, nullptr, 0, nullptr, nullptr);
+
 };
 
 FString FUnrealSharpEditorModule::SelectArchiveDirectory()
@@ -623,6 +625,31 @@ void FUnrealSharpEditorModule::OnAssetManagerSettingsChanged(UObject* Object, FP
 {
 	WaitUpdateAssetTypes();
 	GEditor->GetTimerManager()->SetTimerForNextTick(FTimerDelegate::CreateStatic(&FUnrealSharpEditorModule::ProcessAssetTypes));
+}
+
+bool FUnrealSharpEditorModule::FillTemplateFile(const FString& TemplateName, TMap<FString, FString>& Replacements, const FString& Path)
+{
+	const FString FullFileName = FCSProcHelper::GetPluginDirectory() / TEXT("Templates") / TemplateName + TEXT(".cs.template");
+
+	FString OutTemplate;
+	if (FFileHelper::LoadFileToString(OutTemplate, *FullFileName))
+	{
+		for (const TPair<FString, FString>& Replacement : Replacements)
+		{
+			FString ReplacementKey = TEXT("%") + Replacement.Key + TEXT("%");
+			OutTemplate = OutTemplate.Replace(*ReplacementKey, *Replacement.Value);
+		}
+
+		if (!FFileHelper::SaveStringToFile(OutTemplate, *Path))
+		{
+			UE_LOG(LogUnrealSharpEditor, Error, TEXT("Failed to save %s when trying to create a template"), *Path);
+			return false;
+		}
+		
+		return true;
+	}
+
+	return false;
 }
 
 void FUnrealSharpEditorModule::WaitUpdateAssetTypes()

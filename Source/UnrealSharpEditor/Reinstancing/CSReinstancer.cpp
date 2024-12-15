@@ -140,10 +140,15 @@ void FCSReinstancer::StartReinstancing()
 	NotifyChanges(InterfacesToReinstance);
 	NotifyChanges(StructsToReinstance);
 	NotifyChanges(ClassesToReinstance);
-
-	UpdateBlueprints();
+	
 	Reload->Reinstance();
 	PostReinstance();
+	UpdateBlueprints();
+	
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, true);
+	
+	FBlueprintCompilationManager::ReparentHierarchies(ClassesToReinstance);
+	FBlueprintCompilationManager::ReparentHierarchies(InterfacesToReinstance);
 
 	auto CleanOldTypes = [](auto& Container)
 	{
@@ -154,8 +159,9 @@ void FCSReinstancer::StartReinstancing()
 				continue;
 			}
 			
-			Old->SetFlags(RF_NewerVersionExists);
+			Old->ClearFlags(RF_Standalone);
 			Old->RemoveFromRoot();
+			Old->MarkAsGarbage();
 		}
 
 		Container.Empty();
@@ -176,7 +182,7 @@ void FCSReinstancer::PostReinstance()
 		
 		for (UDataTable*& Table : Tables)
 		{
-			auto Data = Table->GetTableAsJSON();
+			FString Data = Table->GetTableAsJSON();
 			Struct.Key->StructFlags = static_cast<EStructFlags>(STRUCT_NoDestructor | Struct.Key->StructFlags);
 			Table->CleanBeforeStructChange();
 			Table->RowStruct = Struct.Value;
@@ -338,6 +344,13 @@ void FCSReinstancer::UpdateBlueprints()
 					bNeedsNodeReconstruction = true;
 				}
 			}
+			else if (UK2Node_MacroInstance* Node_MacroInstance = Cast<UK2Node_MacroInstance>(Node))
+			{
+				if (TryUpdatePin(Node_MacroInstance->ResolvedWildcardType))
+				{
+					bNeedsNodeReconstruction = true;
+				}
+			}
 			else if (UK2Node_FunctionTerminator* FunctionTerminator = Cast<UK2Node_FunctionTerminator>(Node))
 			{
 				if (const UClass* CurrentClassType = FunctionTerminator->FunctionReference.GetMemberParentClass())
@@ -380,18 +393,16 @@ void FCSReinstancer::UpdateBlueprints()
 
 void FCSReinstancer::GetTablesDependentOnStruct(UScriptStruct* Struct, TArray<UDataTable*>& DataTables)
 {
-	TArray<UDataTable*> Result;
-	if (Struct)
+	TArray<UObject*> FoundDataTables;
+	GetObjectsOfClass(UDataTable::StaticClass(), FoundDataTables);
+	
+	for (UObject* DataTableObj : FoundDataTables)
 	{
-		TArray<UObject*> FoundDataTables;
-		GetObjectsOfClass(UDataTable::StaticClass(), FoundDataTables);
-		for (UObject* DataTableObj : DataTables)
+		UDataTable* DataTable = static_cast<UDataTable*>(DataTableObj);
+		if (DataTable->RowStruct != Struct)
 		{
-			UDataTable* DataTable = Cast<UDataTable>(DataTableObj);
-			if (DataTable && Struct == DataTable->RowStruct)
-			{
-				Result.Add(DataTable);
-			}
+			continue;
 		}
+		DataTables.Add(DataTable);
 	}
 }
