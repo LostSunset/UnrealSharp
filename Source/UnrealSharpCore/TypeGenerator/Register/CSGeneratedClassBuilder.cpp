@@ -116,6 +116,8 @@ void FCSGeneratedClassBuilder::OnFieldReplaced(UCSClass* OldField, UCSClass* New
 	DummyBlueprint->GeneratedClass = nullptr;
 	DummyBlueprint->ParentClass = nullptr;
 
+	OldField->ClassFlags |= CLASS_NewerVersionExists;
+	
 	// Since these classes are of UBlueprintGeneratedClass, Unreal considers them in the reinstancing of Blueprints, when a C# class is inheriting from another C# class.
 	// We don't want that, so we set the old Blueprint to nullptr. Look ReloadUtilities.cpp:line 166
 	// May be a better way? It works so far.
@@ -147,11 +149,7 @@ void FCSGeneratedClassBuilder::ManagedActorConstructor(const FObjectInitializer&
 	InitialSetup(ObjectInitializer, ManagedClass, ClassInfo);
 
 	AActor* Actor = static_cast<AActor*>(ObjectInitializer.GetObj());
-	if (!SetupDefaultSubobjects(ObjectInitializer, Actor, Actor->GetClass(), ManagedClass, ClassInfo) || !Actor->GetRootComponent())
-	{
-		USceneComponent* DefaultSceneRoot = ObjectInitializer.CreateDefaultSubobject<USceneComponent>(Actor, USceneComponent::GetDefaultSceneRootVariableName());
-		Actor->SetRootComponent(DefaultSceneRoot);
-	}
+	SetupDefaultSubobjects(ObjectInitializer, Actor, Actor->GetClass(), ManagedClass, ClassInfo);
 
 	UCSManager::Get().CreateNewManagedObject(ObjectInitializer.GetObj(), ClassInfo->TypeHandle);
 }
@@ -199,17 +197,16 @@ void FCSGeneratedClassBuilder::SetupDefaultTickSettings(UObject* DefaultObject) 
 	}
 }
 
-bool FCSGeneratedClassBuilder::SetupDefaultSubobjects(const FObjectInitializer& ObjectInitializer,
+void FCSGeneratedClassBuilder::SetupDefaultSubobjects(const FObjectInitializer& ObjectInitializer,
                                                       AActor* Actor,
                                                       UClass* ActorClass,
                                                       UCSClass* FirstManagedClass,
                                                       const TSharedPtr<const FCSharpClassInfo>& ClassInfo)
 {
-	bool bCreatedComponents = false;
 	
 	if (UCSClass* ManagedClass = Cast<UCSClass>(FirstManagedClass->GetSuperClass()))
 	{
-		bCreatedComponents = SetupDefaultSubobjects(ObjectInitializer, Actor, ActorClass, ManagedClass,
+		SetupDefaultSubobjects(ObjectInitializer, Actor, ActorClass, ManagedClass,
 		                                           ManagedClass->GetClassInfo());
 	}
 
@@ -231,10 +228,9 @@ bool FCSGeneratedClassBuilder::SetupDefaultSubobjects(const FObjectInitializer& 
 		UObject* NewSubObject = ObjectInitializer.CreateDefaultSubobject(
 			Actor, ObjectProperty->GetFName(), ObjectProperty->PropertyClass, ObjectProperty->PropertyClass, true,
 			false);
-
+		
 		ObjectProperty->SetObjectPropertyValue_InContainer(Actor, NewSubObject);
 		DefaultComponents.Add(ObjectProperty, DefaultComponent);
-		bCreatedComponents = true;
 	}
 
 	for (const TTuple<FObjectProperty*, TSharedPtr<FCSDefaultComponentMetaData>>& DefaultComponent : DefaultComponents)
@@ -254,7 +250,7 @@ bool FCSGeneratedClassBuilder::SetupDefaultSubobjects(const FObjectInitializer& 
 			Actor->SetRootComponent(SceneComponent);
 			continue;
 		}
-
+		
 		FName AttachmentComponentName = DefaultComponentMetaData->AttachmentComponent;
 		FName AttachmentSocketName = DefaultComponentMetaData->AttachmentSocket;
 
@@ -283,7 +279,7 @@ bool FCSGeneratedClassBuilder::SetupDefaultSubobjects(const FObjectInitializer& 
 						Template->SetupAttachment(TemplateAttachmentComponent, Socket);
 					}
 				}
-
+				
 				SceneComponent->SetupAttachment(AttachmentComponent, Socket);
 				continue;
 			}
@@ -291,8 +287,6 @@ bool FCSGeneratedClassBuilder::SetupDefaultSubobjects(const FObjectInitializer& 
 
 		SceneComponent->SetupAttachment(Actor->GetRootComponent());
 	}
-
-	return bCreatedComponents;
 }
 
 void FCSGeneratedClassBuilder::ImplementInterfaces(UClass* ManagedClass, const TArray<FName>& Interfaces)
