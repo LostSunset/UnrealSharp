@@ -28,10 +28,13 @@ struct FCSSpawnActorParameters
 };
 
 UCLASS(meta = (Internal))
-class UNREALSHARPCORE_API UCSWorldExtensions : public UBlueprintFunctionLibrary
+class UCSWorldExtensions : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 public:
 	UFUNCTION(meta = (ScriptMethod))
 	static AActor* SpawnActor(const UObject* WorldContextObject, const TSubclassOf<AActor>& Class, const FTransform& Transform, const FCSSpawnActorParameters& SpawnParameters);
+	
+	UFUNCTION(meta = (ScriptMethod))
+	static void FinishSpawning(AActor* Actor, const FTransform& UserTransform, bool bIsDefaultTransform);
 };

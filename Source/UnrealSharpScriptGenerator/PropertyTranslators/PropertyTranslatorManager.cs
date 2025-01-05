@@ -57,6 +57,8 @@ public static class PropertyTranslatorManager
         AddPropertyTranslator(typeof(UhtObjectProperty), objectPropertyTranslator);
         AddPropertyTranslator(typeof(UhtLazyObjectPtrProperty), objectPropertyTranslator);
         
+        AddPropertyTranslator(typeof(UhtInterfaceProperty), new InterfacePropertyTranslator());
+        
         AddPropertyTranslator(typeof(UhtClassProperty), new ClassPropertyTranslator());
         AddPropertyTranslator(typeof(UhtClassPtrProperty), new ClassPropertyTranslator());
         AddPropertyTranslator(typeof(UhtSoftClassProperty), new SoftClassPropertyTranslator());
@@ -83,6 +85,10 @@ public static class PropertyTranslatorManager
         
         AddPropertyTranslator(typeof(UhtStructProperty), new BlittableStructPropertyTranslator());
         AddPropertyTranslator(typeof(UhtStructProperty), new StructPropertyTranslator());
+        
+        // Manually exported properties
+        InclusionLists.BanProperty("UWorld", "GameState");
+        InclusionLists.BanProperty("UWorld", "AuthorityGameMode");
     }
     
     public static PropertyTranslator? GetTranslator(UhtProperty property)
