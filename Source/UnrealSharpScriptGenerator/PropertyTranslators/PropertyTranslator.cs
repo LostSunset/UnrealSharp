@@ -39,7 +39,10 @@ public abstract class PropertyTranslator
     
     // Can we export this property?
     public abstract bool CanExport(UhtProperty property);
-    
+
+    // Can we support generic types?
+    public abstract bool CanSupportGenericType(UhtProperty property);
+
     // Get the managed type for this property
     // Example: "int" for a property of type "int32"
     public abstract string GetManagedType(UhtProperty property);
@@ -275,7 +278,7 @@ public abstract class PropertyTranslator
         {
             exportSetterAction = ExportBlueprintSetter;
         }
-        else if (SupportsSetter && property.HasReadWriteAccess())
+        else if (SupportsSetter && property.IsReadWrite())
         {
             exportSetterAction = ExportSetter;
         }
@@ -320,15 +323,21 @@ public abstract class PropertyTranslator
             ExportPropertyVariables(builder, property, property.SourceName);
         }
         
-        Action? exportSetterAction = SupportsSetter && property.HasReadWriteAccess() ? ExportSetter : null;
-        ExportProperty_Internal(builder, property, property.GetPropertyName(), ExportBackingFields, null, ExportGetter, exportSetterAction); 
+        bool isReadWrite = property.IsReadWrite();
+        bool isEditDefaultsOnly = property.IsEditDefaultsOnly();
+        
+        Action? exportSetterAction = SupportsSetter && (isReadWrite || isEditDefaultsOnly) ? ExportSetter : null;
+        string setterOperation = isEditDefaultsOnly && !isReadWrite ? "init" : "set";
+        
+        ExportProperty_Internal(builder, property, property.GetPropertyName(), ExportBackingFields, null, ExportGetter, exportSetterAction, setterOperation); 
     }
     
     private void ExportProperty_Internal(GeneratorStringBuilder builder, UhtProperty property, string propertyName, 
         Action? backingFieldsExport,
         Func<string>? exportProtection,
         Action? exportGetter, 
-        Action? exportSetter)
+        Action? exportSetter,
+        string setterOperation = "set")
     {
         builder.AppendLine();
         builder.TryAddWithEditor(property);
@@ -356,7 +365,7 @@ public abstract class PropertyTranslator
 
         if (exportSetter is not null)
         {
-            AppendSetOrInit(builder, property);
+            builder.AppendLine(setterOperation);
             builder.OpenBrace();
             exportSetter();
             builder.CloseBrace();
@@ -365,18 +374,6 @@ public abstract class PropertyTranslator
         builder.CloseBrace();
         builder.TryEndWithEditor(property);
         builder.AppendLine();
-    }
-    
-    private void AppendSetOrInit(GeneratorStringBuilder builder, UhtProperty property)
-    {
-        if (property.HasAllFlags(EPropertyFlags.BlueprintReadOnly | EPropertyFlags.Edit))
-        {
-            builder.AppendLine("init");
-        }
-        else
-        {
-            builder.AppendLine("set");
-        }
     }
     
     private void AppendInvoke(GeneratorStringBuilder builder, FunctionExporter exportedFunction)
